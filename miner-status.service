@@ -1,0 +1,16 @@
+[Unit]
+Description=Miner Status Dashboard
+After=network.target
+
+[Service]
+Type=simple
+User=miner-status
+WorkingDirectory=/opt/miner-status
+ExecStart=/opt/miner-status/venv/bin/python app.py
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,19 @@
+[Unit]
+Description=XMR Automine
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=YOUR_USER
+WorkingDirectory=/path/to/miner
+ExecStart=/bin/bash /path/to/miner/automine.sh
+Restart=always
+RestartSec=10
+KillMode=process
+
+# Optionaler eigener Hostname fürs Dashboard
+# Environment=CUSTOM_HOSTNAME=miner-berlin-01
+
+[Install]
+WantedBy=multi-user.target

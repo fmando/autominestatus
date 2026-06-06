@@ -1,0 +1,5 @@
+pool.cfg
+status.db
+venv/
+__pycache__/
+*.pyc

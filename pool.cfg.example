@@ -1,0 +1,8 @@
+worker=MyWorker
+threads=1
+server[1]=de.catchthatrabbit.com
+port[1]=8008
+server[2]=fi.catchthatrabbit.com
+port[2]=8008
+server[3]=sg.catchthatrabbit.com
+port[3]=8008

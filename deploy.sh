@@ -1,0 +1,203 @@
+#!/bin/bash
+# deploy.sh – Richtet automine auf diesem Host ein.
+# Fragt Worker-Name, max. Threads und Dashboard-URL ab,
+# schreibt pool.cfg und automine.sh, richtet optional den systemd-Dienst ein.
+
+set -e
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+
+echo ""
+echo "╔══════════════════════════════════════╗"
+echo "║        Automine Setup                ║"
+echo "╚══════════════════════════════════════╝"
+echo ""
+
+# ---------------------------------------------------------------------------
+# Eingaben
+# ---------------------------------------------------------------------------
+
+# Worker-Name
+read -rp "Worker-Name (z.B. Ccloud06): " WORKER
+while [[ -z "$WORKER" ]]; do
+    echo "  Worker-Name darf nicht leer sein."
+    read -rp "Worker-Name: " WORKER
+done
+
+# Maximale Thread-Anzahl
+read -rp "Maximale Thread-Anzahl [1-32, Standard: 4]: " MAX_THREADS
+MAX_THREADS="${MAX_THREADS:-4}"
+while ! [[ "$MAX_THREADS" =~ ^[0-9]+$ ]] || (( MAX_THREADS < 1 || MAX_THREADS > 32 )); do
+    echo "  Bitte eine Zahl zwischen 1 und 32 eingeben."
+    read -rp "Maximale Thread-Anzahl: " MAX_THREADS
+done
+
+# Minimale Thread-Anzahl
+read -rp "Minimale Thread-Anzahl [Standard: 1]: " MIN_THREADS
+MIN_THREADS="${MIN_THREADS:-1}"
+while ! [[ "$MIN_THREADS" =~ ^[0-9]+$ ]] || (( MIN_THREADS < 1 || MIN_THREADS > MAX_THREADS )); do
+    echo "  Bitte eine Zahl zwischen 1 und $MAX_THREADS eingeben."
+    read -rp "Minimale Thread-Anzahl: " MIN_THREADS
+done
+
+# Laufzeit-Bereich
+read -rp "Minimale Laufzeit in Minuten [Standard: 5]: " MIN_MIN
+MIN_MIN="${MIN_MIN:-5}"
+read -rp "Maximale Laufzeit in Minuten [Standard: 15]: " MAX_MIN
+MAX_MIN="${MAX_MIN:-15}"
+
+# Dashboard-URL
+read -rp "Status-Dashboard URL [Standard: https://status.m8u.de]: " STATUS_URL
+STATUS_URL="${STATUS_URL:-https://status.m8u.de}"
+
+# Hostname fürs Dashboard
+DEFAULT_HOST="$(hostname -s)"
+read -rp "Hostname fürs Dashboard [Standard: $DEFAULT_HOST]: " CUSTOM_HOST
+CUSTOM_HOST="${CUSTOM_HOST:-$DEFAULT_HOST}"
+
+echo ""
+echo "── Zusammenfassung ─────────────────────"
+echo "  Worker:        $WORKER"
+echo "  Threads:       $MIN_THREADS–$MAX_THREADS"
+echo "  Laufzeit:      $MIN_MIN–$MAX_MIN Minuten"
+echo "  Dashboard:     $STATUS_URL"
+echo "  Hostname:      $CUSTOM_HOST"
+echo "────────────────────────────────────────"
+echo ""
+read -rp "Alles korrekt? Weiter? [J/n]: " CONFIRM
+CONFIRM="${CONFIRM:-J}"
+if [[ ! "$CONFIRM" =~ ^[Jj]$ ]]; then
+    echo "Abgebrochen."
+    exit 0
+fi
+
+# ---------------------------------------------------------------------------
+# pool.cfg schreiben
+# ---------------------------------------------------------------------------
+
+cat > "$SCRIPT_DIR/pool.cfg" <<EOF
+worker=$WORKER
+threads=$MIN_THREADS
+server[1]=de.catchthatrabbit.com
+port[1]=8008
+server[2]=fi.catchthatrabbit.com
+port[2]=8008
+server[3]=sg.catchthatrabbit.com
+port[3]=8008
+EOF
+
+echo "[deploy] pool.cfg geschrieben."
+
+# ---------------------------------------------------------------------------
+# automine.sh schreiben
+# ---------------------------------------------------------------------------
+
+THREAD_RANGE=$((MAX_THREADS - MIN_THREADS + 1))
+MIN_SEC=$((MIN_MIN * 60))
+MAX_SEC=$((MAX_MIN * 60))
+WAIT_RANGE=$((MAX_SEC - MIN_SEC + 1))
+
+cat > "$SCRIPT_DIR/automine.sh" <<EOF
+#!/bin/bash
+# automine.sh – generiert von deploy.sh
+# Threads: $MIN_THREADS–$MAX_THREADS  |  Laufzeit: $MIN_MIN–$MAX_MIN min
+
+SCRIPT_DIR="\$(cd "\$(dirname "\$0")" && pwd)"
+MINE="\$SCRIPT_DIR/mine.sh"
+CFG="\$SCRIPT_DIR/pool.cfg"
+STATUS_URL="$STATUS_URL/report"
+HOSTNAME="${CUSTOM_HOST}"
+
+cleanup() {
+    echo "[automine] Beende Miner (PID \$MINER_PID)..."
+    kill "\$MINER_PID" 2>/dev/null
+    wait "\$MINER_PID" 2>/dev/null
+    echo "[automine] Gestoppt."
+    exit 0
+}
+trap cleanup SIGINT SIGTERM
+
+read_cfg() {
+    grep -m1 "^\$1=" "\$CFG" | cut -d= -f2
+}
+
+while true; do
+    THREADS=\$(( RANDOM % $THREAD_RANGE + $MIN_THREADS ))
+    WAIT_SEC=\$(( RANDOM % $WAIT_RANGE + $MIN_SEC ))
+    WAIT_MIN=\$(echo "scale=1; \$WAIT_SEC/60" | bc)
+
+    sed -i "s/^threads=.*/threads=\$THREADS/" "\$CFG"
+
+    POOL_SERVER=\$(read_cfg "server\[1\]")
+    WORKER=\$(read_cfg "worker")
+
+    echo "[automine] threads=\$THREADS, Laufzeit=\${WAIT_MIN} min (\${WAIT_SEC}s)"
+
+    curl -sf -X POST "\$STATUS_URL" \\
+        -H "Content-Type: application/json" \\
+        -d "{\\"hostname\\":\\"\$HOSTNAME\\",\\"threads\\":\$THREADS,\\"wait_sec\\":\$WAIT_SEC,\\"pool_server\\":\\"\$POOL_SERVER\\",\\"worker\\":\\"\$WORKER\\"}" \\
+        >/dev/null || echo "[automine] Warnung: Status-Meldung fehlgeschlagen"
+
+    bash "\$MINE" &
+    MINER_PID=\$!
+    echo "[automine] Miner gestartet (PID \$MINER_PID)"
+
+    sleep "\$WAIT_SEC"
+    echo "[automine] Zeit abgelaufen – starte neu..."
+    kill "\$MINER_PID" 2>/dev/null
+    wait "\$MINER_PID" 2>/dev/null
+    sleep 2
+done
+EOF
+
+chmod +x "$SCRIPT_DIR/automine.sh"
+echo "[deploy] automine.sh geschrieben."
+
+# ---------------------------------------------------------------------------
+# systemd-Service einrichten (optional)
+# ---------------------------------------------------------------------------
+
+echo ""
+read -rp "Systemd-Dienst einrichten? (benötigt root) [J/n]: " SETUP_SERVICE
+SETUP_SERVICE="${SETUP_SERVICE:-J}"
+
+if [[ "$SETUP_SERVICE" =~ ^[Jj]$ ]]; then
+    if [[ "$EUID" -ne 0 ]]; then
+        echo "  Kein root – systemd-Setup übersprungen."
+        echo "  Manuell nachholen:"
+        echo "    sudo $SCRIPT_DIR/deploy.sh"
+    else
+        SERVICE_USER="${SUDO_USER:-$(whoami)}"
+
+        cat > /etc/systemd/system/automine.service <<EOF
+[Unit]
+Description=XMR Automine
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=$SERVICE_USER
+WorkingDirectory=$SCRIPT_DIR
+ExecStart=/bin/bash $SCRIPT_DIR/automine.sh
+Restart=always
+RestartSec=10
+KillMode=process
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+        systemctl daemon-reload
+        systemctl enable automine
+        systemctl restart automine
+        echo "[deploy] Dienst automine gestartet."
+        echo "  Logs: journalctl -u automine -f"
+    fi
+fi
+
+echo ""
+echo "✓ Setup abgeschlossen."
+echo "  Starten (ohne systemd): ./automine.sh"
+echo "  Dashboard:              $STATUS_URL"
+echo ""

@@ -163,12 +163,52 @@ SETUP_SERVICE="${SETUP_SERVICE:-J}"
 
 if [[ "$SETUP_SERVICE" =~ ^[Jj]$ ]]; then
     if [[ "$EUID" -ne 0 ]]; then
-        echo "  Kein root – systemd-Setup übersprungen."
-        echo "  Manuell nachholen:"
+        echo ""
+        echo "  ⚠ Kein root – systemd-Setup übersprungen."
+        echo ""
+        echo "  Bitte diese Werte in automine.service anpassen und dann manuell einrichten:"
+        echo ""
+        echo "    User=$(whoami)"
+        echo "    WorkingDirectory=$SCRIPT_DIR"
+        echo "    ExecStart=/bin/bash $SCRIPT_DIR/automine.sh"
+        echo ""
+        echo "  Danach:"
+        echo "    sudo cp $SCRIPT_DIR/automine.service /etc/systemd/system/"
+        echo "    sudo systemctl daemon-reload"
+        echo "    sudo systemctl enable automine"
+        echo "    sudo systemctl start automine"
+        echo ""
+        echo "  Logverzeichnis und logrotate manuell einrichten:"
+        echo "    sudo mkdir -p /var/log/automine"
+        echo "    sudo chown $(whoami):$(whoami) /var/log/automine"
+        echo "    sudo cp $SCRIPT_DIR/logrotate.conf /etc/logrotate.d/automine"
+        echo ""
+        echo "  Oder deploy.sh einfach als root erneut ausführen:"
         echo "    sudo $SCRIPT_DIR/deploy.sh"
     else
         SERVICE_USER="${SUDO_USER:-$(whoami)}"
+        LOG_DIR="/var/log/automine"
+        LOG_FILE="$LOG_DIR/automine.log"
 
+        # Logverzeichnis anlegen
+        mkdir -p "$LOG_DIR"
+        chown "$SERVICE_USER:$SERVICE_USER" "$LOG_DIR"
+        echo "[deploy] Logverzeichnis $LOG_DIR angelegt."
+
+        # logrotate einrichten
+        cat > /etc/logrotate.d/automine <<EOF
+$LOG_FILE {
+    daily
+    rotate 7
+    compress
+    missingok
+    notifempty
+    copytruncate
+}
+EOF
+        echo "[deploy] logrotate konfiguriert (täglich, 7 Tage, komprimiert)."
+
+        # systemd-Service schreiben (mit Logdatei statt Journal)
         cat > /etc/systemd/system/automine.service <<EOF
 [Unit]
 Description=XMR Automine
@@ -183,6 +223,8 @@ ExecStart=/bin/bash $SCRIPT_DIR/automine.sh
 Restart=always
 RestartSec=10
 KillMode=process
+StandardOutput=append:$LOG_FILE
+StandardError=append:$LOG_FILE
 
 [Install]
 WantedBy=multi-user.target
@@ -192,7 +234,7 @@ EOF
         systemctl enable automine
         systemctl restart automine
         echo "[deploy] Dienst automine gestartet."
-        echo "  Logs: journalctl -u automine -f"
+        echo "  Logs live lesen: tail -f $LOG_FILE"
     fi
 fi
 

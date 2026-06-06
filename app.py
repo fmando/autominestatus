@@ -138,7 +138,9 @@ SHARED_CSS = """
       background: #2a4a6a;
     }
     .dot.active { background: #4a9eff; }
-    .host { font-weight: 600; }
+    .host { font-weight: 600; color: #fff; }
+    .host a { color: #fff; text-decoration: none; }
+    .host a:hover { text-decoration: underline; }
     .ago  { color: #666; font-size: 0.82rem; }
     .empty {
       text-align: center;
@@ -178,10 +180,10 @@ DASHBOARD = """
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta http-equiv="refresh" content="30">
   <title>Miner Status</title>
-  <style>{{ css }}</style>
+  <style>{{ css | safe }}</style>
 </head>
 <body>
-  <h1>⛏ Miner Status</h1>
+  <h1>⛏ XCB Miner Status</h1>
   <p class="subtitle">Aktualisiert automatisch alle 30 Sekunden &nbsp;·&nbsp;
      Zuletzt: {{ now }}</p>
 
@@ -267,7 +269,7 @@ HISTORY_PAGE = """
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Historie – {{ hostname }}</title>
-  <style>{{ css }}</style>
+  <style>{{ css | safe }}</style>
 </head>
 <body>
   <a class="back" href="/">← Zurück zur Übersicht</a>

@@ -17,6 +17,13 @@ echo ""
 # Eingaben
 # ---------------------------------------------------------------------------
 
+# Wallet-Adresse
+read -rp "Wallet-Adresse: " WALLET
+while [[ -z "$WALLET" ]]; do
+    echo "  Wallet-Adresse darf nicht leer sein."
+    read -rp "Wallet-Adresse: " WALLET
+done
+
 # Worker-Name
 read -rp "Worker-Name (z.B. Ccloud06): " WORKER
 while [[ -z "$WORKER" ]]; do
@@ -24,9 +31,14 @@ while [[ -z "$WORKER" ]]; do
     read -rp "Worker-Name: " WORKER
 done
 
+# CPU-Threads ermitteln
+CPU_THREADS=$(nproc)
+echo "  Diese CPU hat $CPU_THREADS Threads."
+echo ""
+
 # Maximale Thread-Anzahl
-read -rp "Maximale Thread-Anzahl [1-32, Standard: 4]: " MAX_THREADS
-MAX_THREADS="${MAX_THREADS:-4}"
+read -rp "Maximale Thread-Anzahl [Standard: $CPU_THREADS]: " MAX_THREADS
+MAX_THREADS="${MAX_THREADS:-$CPU_THREADS}"
 while ! [[ "$MAX_THREADS" =~ ^[0-9]+$ ]] || (( MAX_THREADS < 1 || MAX_THREADS > 32 )); do
     echo "  Bitte eine Zahl zwischen 1 und 32 eingeben."
     read -rp "Maximale Thread-Anzahl: " MAX_THREADS
@@ -57,6 +69,7 @@ CUSTOM_HOST="${CUSTOM_HOST:-$DEFAULT_HOST}"
 
 echo ""
 echo "── Zusammenfassung ─────────────────────"
+echo "  Wallet:        ${WALLET:0:6}...${WALLET: -6}"
 echo "  Worker:        $WORKER"
 echo "  Threads:       $MIN_THREADS–$MAX_THREADS"
 echo "  Laufzeit:      $MIN_MIN–$MAX_MIN Minuten"
@@ -76,6 +89,7 @@ fi
 # ---------------------------------------------------------------------------
 
 cat > "$SCRIPT_DIR/pool.cfg" <<EOF
+wallet=$WALLET
 worker=$WORKER
 threads=$MIN_THREADS
 server[1]=de.catchthatrabbit.com
@@ -211,7 +225,7 @@ EOF
         # systemd-Service schreiben (mit Logdatei statt Journal)
         cat > /etc/systemd/system/automine.service <<EOF
 [Unit]
-Description=XMR Automine
+Description=XCB Automine
 After=network-online.target
 Wants=network-online.target
 
@@ -222,7 +236,8 @@ WorkingDirectory=$SCRIPT_DIR
 ExecStart=/bin/bash $SCRIPT_DIR/automine.sh
 Restart=always
 RestartSec=10
-KillMode=process
+KillMode=control-group
+TimeoutStopSec=10
 StandardOutput=append:$LOG_FILE
 StandardError=append:$LOG_FILE
 
@@ -239,7 +254,18 @@ EOF
 fi
 
 echo ""
-echo "✓ Setup abgeschlossen."
-echo "  Starten (ohne systemd): ./automine.sh"
-echo "  Dashboard:              $STATUS_URL"
+echo "╔══════════════════════════════════════════════════════════╗"
+echo "║  ✓ Setup abgeschlossen – Wichtige Befehle               ║"
+echo "╠══════════════════════════════════════════════════════════╣"
+echo "║  Dienst starten      systemctl start automine           ║"
+echo "║  Dienst stoppen      systemctl stop automine            ║"
+echo "║  Dienst neu starten  systemctl restart automine         ║"
+echo "║  Status anzeigen     systemctl status automine          ║"
+echo "║                                                          ║"
+echo "║  Log live lesen      tail -f /var/log/automine/automine.log ║"
+echo "║                                                          ║"
+echo "║  Repo aktualisieren  git pull && systemctl restart automine ║"
+echo "║                                                          ║"
+echo "║  Dashboard:          $STATUS_URL"
+echo "╚══════════════════════════════════════════════════════════╝"
 echo ""

@@ -3,13 +3,15 @@
 # Fragt Worker-Name, max. Threads und Dashboard-URL ab,
 # schreibt pool.cfg und automine.sh, richtet optional den systemd-Dienst ein.
 
+AUTOMINE_VERSION="1.2.0"
+
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 echo ""
 echo "╔══════════════════════════════════════╗"
-echo "║        Automine Setup                ║"
+echo "║     Automine Setup v$AUTOMINE_VERSION            ║"
 echo "╚══════════════════════════════════════╝"
 echo ""
 
@@ -69,6 +71,7 @@ CUSTOM_HOST="${CUSTOM_HOST:-$DEFAULT_HOST}"
 
 echo ""
 echo "── Zusammenfassung ─────────────────────"
+echo "  Version:       v$AUTOMINE_VERSION"
 echo "  Wallet:        ${WALLET:0:6}...${WALLET: -6}"
 echo "  Worker:        $WORKER"
 echo "  Threads:       $MIN_THREADS–$MAX_THREADS"
@@ -110,12 +113,15 @@ THREAD_RANGE=$((MAX_THREADS - MIN_THREADS + 1))
 MIN_SEC=$((MIN_MIN * 60))
 MAX_SEC=$((MAX_MIN * 60))
 WAIT_RANGE=$((MAX_SEC - MIN_SEC + 1))
+DEPLOY_DATE="$(date '+%Y-%m-%d %H:%M')"
 
 cat > "$SCRIPT_DIR/automine.sh" <<EOF
 #!/bin/bash
-# automine.sh – generiert von deploy.sh
+# automine.sh v$AUTOMINE_VERSION – generiert von deploy.sh am $DEPLOY_DATE
 # Threads: $MIN_THREADS–$MAX_THREADS  |  Laufzeit: $MIN_MIN–$MAX_MIN min
 
+AUTOMINE_VERSION="$AUTOMINE_VERSION"
+DEPLOY_DATE="$DEPLOY_DATE"
 SCRIPT_DIR="\$(cd "\$(dirname "\$0")" && pwd)"
 MINE="\$SCRIPT_DIR/mine.sh"
 CFG="\$SCRIPT_DIR/pool.cfg"
@@ -137,6 +143,14 @@ read_cfg() {
     grep -m1 "^\$1=" "\$CFG" | cut -d= -f2
 }
 
+# Host-Infos sammeln (einmalig beim Start)
+HOST_IP=\$(hostname -I | awk '{print \$1}')
+HOST_OS=\$(grep PRETTY_NAME /etc/os-release 2>/dev/null | cut -d'"' -f2)
+HOST_KERNEL=\$(uname -r)
+HOST_CPU=\$(grep "model name" /proc/cpuinfo 2>/dev/null | head -1 | cut -d':' -f2 | xargs)
+HOST_RAM=\$(free -h 2>/dev/null | awk '/^Mem:/{print \$2}')
+HOST_CORES=\$(nproc)
+
 # Liest alle 30s die letzte Hashrate aus dem Log und meldet sie ans Dashboard
 hashrate_reporter() {
     local miner_pid=\$1
@@ -144,7 +158,8 @@ hashrate_reporter() {
         sleep 30
         local HR
         HR=\$(tail -500 "\$LOG_FILE" 2>/dev/null \\
-             | grep -a " m " \\
+             | sed 's/\x1b\[[0-9;]*m//g' \\
+             | grep " m " \\
              | tail -1 \\
              | grep -oP 'A\d+ \K[\d.]+ [KMG]?h' \\
              | head -1)
@@ -167,11 +182,25 @@ while true; do
     POOL_SERVER=\$(read_cfg "server\[1\]")
     WORKER=\$(read_cfg "worker")
 
-    echo "[automine] threads=\$THREADS, Laufzeit=\${WAIT_MIN} min (\${WAIT_SEC}s)"
+    echo "[automine] v\$AUTOMINE_VERSION | threads=\$THREADS, Laufzeit=\${WAIT_MIN} min (\${WAIT_SEC}s)"
 
     curl -sf -X POST "\${STATUS_BASE}/report" \\
         -H "Content-Type: application/json" \\
-        -d "{\\"hostname\\":\\"\$HOSTNAME\\",\\"threads\\":\$THREADS,\\"wait_sec\\":\$WAIT_SEC,\\"pool_server\\":\\"\$POOL_SERVER\\",\\"worker\\":\\"\$WORKER\\"}" \\
+        -d "{
+          \\"hostname\\":    \\"\$HOSTNAME\\",
+          \\"threads\\":     \$THREADS,
+          \\"wait_sec\\":    \$WAIT_SEC,
+          \\"pool_server\\": \\"\$POOL_SERVER\\",
+          \\"worker\\":      \\"\$WORKER\\",
+          \\"version\\":     \\"\$AUTOMINE_VERSION\\",
+          \\"deploy_date\\": \\"\$DEPLOY_DATE\\",
+          \\"host_ip\\":     \\"\$HOST_IP\\",
+          \\"host_os\\":     \\"\$HOST_OS\\",
+          \\"host_kernel\\": \\"\$HOST_KERNEL\\",
+          \\"host_cpu\\":    \\"\$HOST_CPU\\",
+          \\"host_ram\\":    \\"\$HOST_RAM\\",
+          \\"host_cores\\":  \\"\$HOST_CORES\\"
+        }" \\
         >/dev/null || echo "[automine] Warnung: Status-Meldung fehlgeschlagen"
 
     bash "\$MINE" &
@@ -192,7 +221,7 @@ done
 EOF
 
 chmod +x "$SCRIPT_DIR/automine.sh"
-echo "[deploy] automine.sh geschrieben."
+echo "[deploy] automine.sh v$AUTOMINE_VERSION geschrieben."
 
 # ---------------------------------------------------------------------------
 # systemd-Service einrichten (optional)
@@ -231,12 +260,10 @@ if [[ "$SETUP_SERVICE" =~ ^[Jj]$ ]]; then
         LOG_DIR="/var/log/automine"
         LOG_FILE="$LOG_DIR/automine.log"
 
-        # Logverzeichnis anlegen
         mkdir -p "$LOG_DIR"
         chown "$SERVICE_USER:$SERVICE_USER" "$LOG_DIR"
         echo "[deploy] Logverzeichnis $LOG_DIR angelegt."
 
-        # logrotate einrichten
         cat > /etc/logrotate.d/automine <<EOF
 $LOG_FILE {
     daily
@@ -249,10 +276,9 @@ $LOG_FILE {
 EOF
         echo "[deploy] logrotate konfiguriert (täglich, 7 Tage, komprimiert)."
 
-        # systemd-Service schreiben (mit Logdatei statt Journal)
         cat > /etc/systemd/system/automine.service <<EOF
 [Unit]
-Description=XCB Automine
+Description=XCB Automine v$AUTOMINE_VERSION
 After=network-online.target
 Wants=network-online.target
 
@@ -265,6 +291,7 @@ Restart=always
 RestartSec=10
 KillMode=control-group
 TimeoutStopSec=10
+Environment=TERM=xterm
 StandardOutput=append:$LOG_FILE
 StandardError=append:$LOG_FILE
 
@@ -275,7 +302,7 @@ EOF
         systemctl daemon-reload
         systemctl enable automine
         systemctl restart automine
-        echo "[deploy] Dienst automine gestartet."
+        echo "[deploy] Dienst automine v$AUTOMINE_VERSION gestartet."
         echo "  Logs live lesen: tail -f $LOG_FILE"
     fi
 fi

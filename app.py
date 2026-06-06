@@ -34,6 +34,7 @@ def init_db():
                 wait_sec    INTEGER,
                 pool_server TEXT,
                 worker      TEXT,
+                hashrate    TEXT,
                 reported_at INTEGER,
                 started_at  INTEGER
             )
@@ -51,6 +52,12 @@ def init_db():
             )
         """)
         db.execute("CREATE INDEX IF NOT EXISTS idx_hist_host ON history(hostname)")
+
+        # Migration: hashrate-Spalte nachrüsten falls DB schon existiert
+        cols = [r[1] for r in db.execute("PRAGMA table_info(miners)").fetchall()]
+        if "hashrate" not in cols:
+            db.execute("ALTER TABLE miners ADD COLUMN hashrate TEXT")
+
         db.commit()
 
 
@@ -142,6 +149,8 @@ SHARED_CSS = """
     .host a { color: #fff; text-decoration: none; }
     .host a:hover { text-decoration: underline; }
     .ago  { color: #666; font-size: 0.82rem; }
+    .hashrate { font-weight: 600; color: #f0a040; font-variant-numeric: tabular-nums; }
+    .hashrate-none { color: #444; font-size: 0.82rem; }
     .empty {
       text-align: center;
       padding: 3rem;
@@ -166,6 +175,13 @@ SHARED_CSS = """
       font-size: 0.88rem;
       color: #4a9eff;
     }
+    th.sortable {
+      cursor: pointer;
+      user-select: none;
+    }
+    th.sortable:hover { color: #bbb; }
+    th.sort-asc::after  { content: ' ▲'; color: #4a9eff; }
+    th.sort-desc::after { content: ' ▼'; color: #4a9eff; }
 """
 
 # ---------------------------------------------------------------------------
@@ -179,7 +195,7 @@ DASHBOARD = """
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta http-equiv="refresh" content="30">
-  <title>Miner Status</title>
+  <title>XCB Miner Status</title>
   <style>{{ css | safe }}</style>
 </head>
 <body>
@@ -209,14 +225,15 @@ DASHBOARD = """
   {% if miners %}
   <table>
     <thead>
-      <tr>
-        <th>Host</th>
-        <th>Status</th>
-        <th>Threads</th>
-        <th>Laufzeit</th>
-        <th>Pool-Server</th>
-        <th>Worker</th>
-        <th>Letztes Lebenszeichen</th>
+      <tr id="header-row">
+        <th class="sortable" data-col="0">Host</th>
+        <th class="sortable" data-col="1">Status</th>
+        <th class="sortable" data-col="2">Threads</th>
+        <th class="sortable" data-col="3">Hashrate</th>
+        <th class="sortable" data-col="4">Laufzeit</th>
+        <th class="sortable" data-col="5">Pool-Server</th>
+        <th class="sortable" data-col="6">Worker</th>
+        <th class="sortable" data-col="7">Letztes Lebenszeichen</th>
       </tr>
     </thead>
     <tbody>
@@ -240,6 +257,13 @@ DASHBOARD = """
             &nbsp;{{ m.threads }}
           </div>
         </td>
+        <td>
+          {% if m.hashrate %}
+            <span class="hashrate">{{ m.hashrate }}</span>
+          {% else %}
+            <span class="hashrate-none">–</span>
+          {% endif %}
+        </td>
         <td>{{ m.wait_min }} min</td>
         <td>{{ m.pool_server }}</td>
         <td>{{ m.worker }}</td>
@@ -255,6 +279,59 @@ DASHBOARD = """
   <div class="empty">Noch keine Meldungen eingegangen.</div>
   {% endif %}
 </body>
+<script>
+(function() {
+  var currentCol = 0;
+  var ascending  = true;
+
+  function cellValue(row, col) {
+    var td = row.querySelectorAll('td')[col];
+    return td ? td.innerText.trim() : '';
+  }
+
+  function sortTable(col) {
+    if (currentCol === col) {
+      ascending = !ascending;
+    } else {
+      currentCol = col;
+      ascending  = true;
+    }
+
+    // Pfeile in Header aktualisieren
+    document.querySelectorAll('th.sortable').forEach(function(th) {
+      th.classList.remove('sort-asc', 'sort-desc');
+      if (parseInt(th.dataset.col) === currentCol) {
+        th.classList.add(ascending ? 'sort-asc' : 'sort-desc');
+      }
+    });
+
+    var tbody = document.querySelector('tbody');
+    if (!tbody) return;
+    var rows = Array.from(tbody.querySelectorAll('tr'));
+
+    rows.sort(function(a, b) {
+      var av = cellValue(a, currentCol);
+      var bv = cellValue(b, currentCol);
+      // Zahlen erkennen (z.B. Threads, Laufzeit, Hashrate-Wert)
+      var an = parseFloat(av);
+      var bn = parseFloat(bv);
+      var cmp = (!isNaN(an) && !isNaN(bn)) ? an - bn : av.localeCompare(bv, 'de');
+      return ascending ? cmp : -cmp;
+    });
+
+    rows.forEach(function(r) { tbody.appendChild(r); });
+  }
+
+  document.querySelectorAll('th.sortable').forEach(function(th) {
+    th.addEventListener('click', function() {
+      sortTable(parseInt(th.dataset.col));
+    });
+  });
+
+  // Standard: nach Host aufsteigend sortieren
+  sortTable(0);
+})();
+</script>
 </html>
 """
 
@@ -342,22 +419,21 @@ def report():
     }
 
     with get_db() as db:
-        # Aktuellen Stand aktualisieren
         db.execute("""
             INSERT INTO miners (hostname, threads, wait_sec, pool_server,
-                                worker, reported_at, started_at)
+                                worker, hashrate, reported_at, started_at)
             VALUES (:hostname, :threads, :wait_sec, :pool_server,
-                    :worker, :now, :now)
+                    :worker, NULL, :now, :now)
             ON CONFLICT(hostname) DO UPDATE SET
                 threads     = excluded.threads,
                 wait_sec    = excluded.wait_sec,
                 pool_server = excluded.pool_server,
                 worker      = excluded.worker,
+                hashrate    = NULL,
                 reported_at = excluded.reported_at,
                 started_at  = excluded.started_at
         """, params)
 
-        # Historien-Eintrag hinzufügen
         db.execute("""
             INSERT INTO history (hostname, threads, wait_sec, pool_server,
                                  worker, reported_at)
@@ -365,6 +441,22 @@ def report():
                     :worker, :now)
         """, params)
 
+        db.commit()
+    return jsonify({"ok": True}), 200
+
+
+@app.route("/hashrate", methods=["POST"])
+def hashrate():
+    """Empfängt periodische Hashrate-Meldung vom Mining-Server."""
+    data = request.get_json(silent=True) or request.form
+    if not data or "hostname" not in data or "hashrate" not in data:
+        return jsonify({"error": "Fehlende Felder"}), 400
+
+    with get_db() as db:
+        db.execute(
+            "UPDATE miners SET hashrate = ? WHERE hostname = ?",
+            (data.get("hashrate"), data.get("hostname"))
+        )
         db.commit()
     return jsonify({"ok": True}), 200
 
@@ -394,6 +486,7 @@ def dashboard():
             "wait_min":     round(r["wait_sec"] / 60, 1),
             "pool_server":  r["pool_server"],
             "worker":       r["worker"],
+            "hashrate":     r["hashrate"] if is_alive else None,
             "is_alive":     is_alive,
             "reported_str": datetime.fromtimestamp(r["reported_at"])
                                     .strftime("%d.%m.%Y %H:%M:%S"),
@@ -442,16 +535,10 @@ def host_history(hostname):
     )
 
 
-# ---------------------------------------------------------------------------
-# Ping (optional, für Monitoring)
-# ---------------------------------------------------------------------------
-
 @app.route("/ping")
 def ping():
     return "pong", 200
 
-
-# ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
     init_db()

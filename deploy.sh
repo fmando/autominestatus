@@ -119,11 +119,13 @@ cat > "$SCRIPT_DIR/automine.sh" <<EOF
 SCRIPT_DIR="\$(cd "\$(dirname "\$0")" && pwd)"
 MINE="\$SCRIPT_DIR/mine.sh"
 CFG="\$SCRIPT_DIR/pool.cfg"
-STATUS_URL="$STATUS_URL/report"
+STATUS_BASE="$STATUS_URL"
 HOSTNAME="${CUSTOM_HOST}"
+LOG_FILE="/var/log/automine/automine.log"
 
 cleanup() {
     echo "[automine] Beende Miner (PID \$MINER_PID)..."
+    kill "\$REPORTER_PID" 2>/dev/null
     kill "\$MINER_PID" 2>/dev/null
     wait "\$MINER_PID" 2>/dev/null
     echo "[automine] Gestoppt."
@@ -133,6 +135,26 @@ trap cleanup SIGINT SIGTERM
 
 read_cfg() {
     grep -m1 "^\$1=" "\$CFG" | cut -d= -f2
+}
+
+# Liest alle 30s die letzte Hashrate aus dem Log und meldet sie ans Dashboard
+hashrate_reporter() {
+    local miner_pid=\$1
+    while kill -0 "\$miner_pid" 2>/dev/null; do
+        sleep 30
+        local HR
+        HR=\$(tail -500 "\$LOG_FILE" 2>/dev/null \\
+             | grep -a " m " \\
+             | tail -1 \\
+             | grep -oP 'A\d+ \K[\d.]+ [KMG]?h' \\
+             | head -1)
+        if [[ -n "\$HR" ]]; then
+            curl -sf -X POST "\${STATUS_BASE}/hashrate" \\
+                -H "Content-Type: application/json" \\
+                -d "{\\"hostname\\":\\"\$HOSTNAME\\",\\"hashrate\\":\\"\$HR\\"}" \\
+                >/dev/null || true
+        fi
+    done
 }
 
 while true; do
@@ -147,7 +169,7 @@ while true; do
 
     echo "[automine] threads=\$THREADS, Laufzeit=\${WAIT_MIN} min (\${WAIT_SEC}s)"
 
-    curl -sf -X POST "\$STATUS_URL" \\
+    curl -sf -X POST "\${STATUS_BASE}/report" \\
         -H "Content-Type: application/json" \\
         -d "{\\"hostname\\":\\"\$HOSTNAME\\",\\"threads\\":\$THREADS,\\"wait_sec\\":\$WAIT_SEC,\\"pool_server\\":\\"\$POOL_SERVER\\",\\"worker\\":\\"\$WORKER\\"}" \\
         >/dev/null || echo "[automine] Warnung: Status-Meldung fehlgeschlagen"
@@ -156,8 +178,13 @@ while true; do
     MINER_PID=\$!
     echo "[automine] Miner gestartet (PID \$MINER_PID)"
 
+    # Hashrate-Reporter als Hintergrundprozess starten
+    hashrate_reporter "\$MINER_PID" &
+    REPORTER_PID=\$!
+
     sleep "\$WAIT_SEC"
     echo "[automine] Zeit abgelaufen – starte neu..."
+    kill "\$REPORTER_PID" 2>/dev/null
     kill "\$MINER_PID" 2>/dev/null
     wait "\$MINER_PID" 2>/dev/null
     sleep 2

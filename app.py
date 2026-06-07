@@ -42,7 +42,8 @@ def init_db():
                 host_kernel TEXT,
                 host_cpu    TEXT,
                 host_ram    TEXT,
-                host_cores  TEXT,
+                host_cores    TEXT,
+                miner_version TEXT,
                 reported_at INTEGER,
                 started_at  INTEGER
             )
@@ -72,7 +73,8 @@ def init_db():
             ("host_kernel", "TEXT"),
             ("host_cpu",    "TEXT"),
             ("host_ram",    "TEXT"),
-            ("host_cores",  "TEXT"),
+            ("host_cores",    "TEXT"),
+            ("miner_version", "TEXT"),
         ]:
             if col not in cols:
                 db.execute(f"ALTER TABLE miners ADD COLUMN {col} {typ}")
@@ -332,7 +334,10 @@ HISTORY_PAGE = """
   <a class="back" href="/">← Zurück zur Übersicht</a>
   <h2>⛏ {{ hostname }}</h2>
   {% if info.version %}
-  <p class="subtitle">v{{ info.version }} &nbsp;·&nbsp; deployed {{ info.deploy_date or '–' }}</p>
+  <p class="subtitle">
+    automine v{{ info.version }} &nbsp;·&nbsp; deployed {{ info.deploy_date or '–' }}
+    {% if info.miner_version %}&nbsp;·&nbsp; coreminer {{ info.miner_version }}{% endif %}
+  </p>
   {% endif %}
 
   {% if info.host_ip %}
@@ -477,8 +482,12 @@ def hashrate():
     if not data or "hostname" not in data or "hashrate" not in data:
         return jsonify({"error": "Fehlende Felder"}), 400
     with get_db() as db:
-        db.execute("UPDATE miners SET hashrate = ? WHERE hostname = ?",
-                   (data.get("hashrate"), data.get("hostname")))
+        db.execute("""
+            UPDATE miners SET
+                hashrate      = ?,
+                miner_version = COALESCE(?, miner_version)
+            WHERE hostname = ?
+        """, (data.get("hashrate"), data.get("miner_version") or None, data.get("hostname")))
         db.commit()
     return jsonify({"ok": True}), 200
 

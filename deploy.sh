@@ -3,7 +3,7 @@
 # Fragt Worker-Name, max. Threads und Dashboard-URL ab,
 # schreibt pool.cfg und automine.sh, richtet optional den systemd-Dienst ein.
 
-AUTOMINE_VERSION="1.2.0"
+AUTOMINE_VERSION="1.4.0"
 
 set -e
 
@@ -151,7 +151,7 @@ HOST_CPU=\$(grep "model name" /proc/cpuinfo 2>/dev/null | head -1 | cut -d':' -f
 HOST_RAM=\$(free -h 2>/dev/null | awk '/^Mem:/{print \$2}')
 HOST_CORES=\$(nproc)
 
-# Liest alle 30s die letzte Hashrate aus dem Log und meldet sie ans Dashboard
+# Liest alle 30s die letzten 10 m-Zeilen, bildet den Durchschnitt und meldet ans Dashboard
 hashrate_reporter() {
     local miner_pid=\$1
     while kill -0 "\$miner_pid" 2>/dev/null; do
@@ -160,13 +160,37 @@ hashrate_reporter() {
         HR=\$(tail -500 "\$LOG_FILE" 2>/dev/null \\
              | sed 's/\x1b\[[0-9;]*m//g' \\
              | grep " m " \\
-             | tail -1 \\
+             | tail -10 \\
              | grep -oP 'A\d+ \K[\d.]+ [KMG]?h' \\
-             | head -1)
+             | awk '{
+                 val=\$1; unit=\$2;
+                 if      (unit=="h")  kh=val/1000;
+                 else if (unit=="Kh") kh=val;
+                 else if (unit=="Mh") kh=val*1000;
+                 else if (unit=="Gh") kh=val*1000000;
+                 else kh=val;
+                 sum+=kh; count++;
+               }
+               END {
+                 if (count>0) {
+                   avg=sum/count;
+                   if      (avg>=1000000) printf "%.2f Gh", avg/1000000;
+                   else if (avg>=1000)    printf "%.2f Mh", avg/1000;
+                   else if (avg>=1)       printf "%.2f Kh", avg;
+                   else                   printf "%.2f h",  avg*1000;
+                 }
+               }')
+        # Miner-Version aus dem Log lesen (letzte Zeile der Form v0.x.y+commit....)
+        local MV
+        MV=\$(tail -2000 "\$LOG_FILE" 2>/dev/null \\
+             | sed 's/\x1b\[[0-9;]*m//g' \\
+             | grep -oP '^v[0-9]+\.[0-9]+\.[0-9]+(\+commit\.[a-f0-9]+)?' \\
+             | tail -1)
+
         if [[ -n "\$HR" ]]; then
             curl -sf -X POST "\${STATUS_BASE}/hashrate" \\
                 -H "Content-Type: application/json" \\
-                -d "{\\"hostname\\":\\"\$HOSTNAME\\",\\"hashrate\\":\\"\$HR\\"}" \\
+                -d "{\\"hostname\\":\\"\$HOSTNAME\\",\\"hashrate\\":\\"\$HR\\",\\"miner_version\\":\\"\$MV\\"}" \\
                 >/dev/null || true
         fi
     done

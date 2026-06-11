@@ -33,15 +33,32 @@ download_coreminer() {
     echo "[deploy] Prüfe neueste coreminer-Version..."
     json=$(curl -sf --max-time 15 \
         "https://api.github.com/repos/catchthatrabbit/coreminer/releases/latest" 2>/dev/null)
-    tag=$(echo "$json" | grep -o '"tag_name":"[^"]*"' | head -1 | cut -d'"' -f4)
+    tag=$(echo "$json" | grep -o '"tag_name"[[:space:]]*:[[:space:]]*"[^"]*"' | head -1 | cut -d'"' -f4)
 
     if [[ -z "$tag" ]]; then
-        echo "[deploy] FEHLER: GitHub API nicht erreichbar."
-        if [[ ! -f "$SCRIPT_DIR/coreminer" ]]; then
-            echo "[deploy] Kein lokaler coreminer gefunden – Abbruch."
+        echo "[deploy] WARNUNG: GitHub API nicht erreichbar."
+        if [[ -f "$SCRIPT_DIR/coreminer" ]]; then
+            echo "[deploy] Verwende vorhandenen coreminer."
+            return
+        fi
+        echo ""
+        echo "  Coreminer konnte nicht automatisch heruntergeladen werden."
+        echo "  Optionen:"
+        echo "    a) coreminer manuell herunterladen und nach $SCRIPT_DIR/coreminer kopieren"
+        echo "    b) Pfad zu einem vorhandenen coreminer-Binary angeben"
+        echo ""
+        read -rp "Pfad zum coreminer-Binary (oder leer lassen zum Abbrechen): " MANUAL_PATH
+        if [[ -z "$MANUAL_PATH" ]]; then
+            echo "[deploy] Abbruch."
             exit 1
         fi
-        echo "[deploy] Verwende vorhandenen coreminer."
+        if [[ ! -f "$MANUAL_PATH" ]]; then
+            echo "[deploy] FEHLER: Datei nicht gefunden: $MANUAL_PATH"
+            exit 1
+        fi
+        cp "$MANUAL_PATH" "$SCRIPT_DIR/coreminer"
+        chmod +x "$SCRIPT_DIR/coreminer"
+        echo "[deploy] coreminer von $MANUAL_PATH übernommen."
         return
     fi
 

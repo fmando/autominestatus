@@ -6,12 +6,48 @@ Empfängt Push-Meldungen von automine.sh und zeigt alle Instanzen.
 
 import sqlite3
 import time
+import os
 from datetime import datetime
 from flask import Flask, request, jsonify, render_template_string
 
 app = Flask(__name__)
-DB = "/opt/miner-status/status.db"
-DEAD_AFTER = 20 * 60  # Sekunden – Instanz gilt als tot
+DB          = "/opt/miner-status/status.db"
+TOKEN_FILE  = "/opt/miner-status/token.cfg"
+WALLET_FILE = "/opt/miner-status/wallet.cfg"
+DEAD_AFTER  = 20 * 60  # Sekunden – Instanz gilt als tot
+
+
+# ---------------------------------------------------------------------------
+# Token / Wallet
+# ---------------------------------------------------------------------------
+
+def load_token():
+    try:
+        with open(TOKEN_FILE) as f:
+            return f.read().strip()
+    except Exception:
+        return None
+
+def load_wallet():
+    try:
+        with open(WALLET_FILE) as f:
+            return f.read().strip()
+    except Exception:
+        return ""
+
+def save_wallet(wallet):
+    os.makedirs(os.path.dirname(WALLET_FILE), exist_ok=True)
+    with open(WALLET_FILE, "w") as f:
+        f.write(wallet.strip())
+
+def check_token(req):
+    """Gibt True zurück wenn Token korrekt."""
+    token = load_token()
+    if not token:
+        return False
+    provided = req.args.get("token") or req.form.get("token") \
+               or req.headers.get("X-Token")
+    return provided == token
 
 
 # ---------------------------------------------------------------------------
@@ -206,7 +242,9 @@ DASHBOARD = """
 </head>
 <body>
   <h1>⛏ XCB Miner Status</h1>
-  <p class="subtitle">Aktualisiert automatisch alle 30 Sekunden &nbsp;·&nbsp; Zuletzt: {{ now }}</p>
+  <p class="subtitle">Aktualisiert automatisch alle 30 Sekunden &nbsp;·&nbsp; Zuletzt: {{ now }}
+    &nbsp;·&nbsp; <a href="/admin?token=" style="color:#556;font-size:0.8rem;">⚙ Wallet</a>
+  </p>
 
   <div class="stats">
     <div class="stat">
@@ -568,6 +606,97 @@ def host_history(hostname):
         info=info,
         rows=entries,
         total=len(entries),
+    )
+
+
+@app.route("/wallet", methods=["GET"])
+def get_wallet():
+    if not check_token(request):
+        return "Unauthorized", 401
+    return load_wallet(), 200
+
+
+@app.route("/wallet", methods=["POST"])
+def set_wallet():
+    if not check_token(request):
+        return "Unauthorized", 401
+    wallet = (request.form.get("wallet") or "").strip()
+    if not wallet:
+        return jsonify({"error": "Wallet darf nicht leer sein"}), 400
+    save_wallet(wallet)
+    return jsonify({"ok": True, "wallet": wallet[:6] + "..." + wallet[-6:]}), 200
+
+
+ADMIN_PAGE = """
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Admin – Wallet</title>
+  <style>{{ css | safe }}</style>
+</head>
+<body>
+  <a class="back" href="/">← Zurück zur Übersicht</a>
+  <h1>⚙ Wallet verwalten</h1>
+  <p class="subtitle">Änderungen werden beim nächsten Miner-Neustart auf allen Servern aktiv.</p>
+
+  {% if message %}
+  <div style="background:#1a3a2a;color:#4caf82;padding:0.8rem 1.2rem;border-radius:8px;margin-bottom:1.5rem;">
+    {{ message }}
+  </div>
+  {% endif %}
+
+  <div style="background:#1e2030;border-radius:10px;padding:1.5rem;max-width:600px;">
+    <div style="margin-bottom:1.2rem;">
+      <div style="font-size:0.78rem;color:#666;text-transform:uppercase;letter-spacing:.05em;margin-bottom:0.4rem;">
+        Aktuelle Wallet
+      </div>
+      <div style="font-family:monospace;font-size:0.9rem;color:#4a9eff;word-break:break-all;">
+        {{ wallet or '(nicht gesetzt)' }}
+      </div>
+    </div>
+
+    <form method="POST" action="/admin?token={{ token }}">
+      <div style="margin-bottom:1rem;">
+        <label style="font-size:0.85rem;color:#888;display:block;margin-bottom:0.4rem;">
+          Neue Wallet-Adresse
+        </label>
+        <input type="text" name="wallet" value="{{ wallet }}"
+          style="width:100%;background:#0f1117;border:1px solid #2a2d3e;border-radius:6px;
+                 padding:0.6rem 0.8rem;color:#e0e0e0;font-family:monospace;font-size:0.9rem;">
+      </div>
+      <button type="submit"
+        style="background:#4a9eff;color:#fff;border:none;border-radius:6px;
+               padding:0.6rem 1.5rem;cursor:pointer;font-size:0.9rem;font-weight:600;">
+        Speichern
+      </button>
+    </form>
+  </div>
+</body>
+</html>
+"""
+
+
+@app.route("/admin", methods=["GET", "POST"])
+def admin():
+    if not check_token(request):
+        return "Unauthorized", 401
+
+    message = None
+    if request.method == "POST":
+        wallet = (request.form.get("wallet") or "").strip()
+        if wallet:
+            save_wallet(wallet)
+            message = f"Wallet gespeichert: {wallet[:6]}...{wallet[-6:]}"
+
+    token = request.args.get("token") or request.form.get("token") or ""
+    return render_template_string(
+        ADMIN_PAGE,
+        css=SHARED_CSS,
+        wallet=load_wallet(),
+        token=token,
+        message=message,
     )
 
 

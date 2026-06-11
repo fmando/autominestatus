@@ -11,7 +11,6 @@ from datetime import datetime
 from flask import Flask, request, jsonify, render_template_string
 
 app = Flask(__name__)
-APP_VERSION = "2.1.0"
 DB          = "/opt/miner-status/status.db"
 TOKEN_FILE  = "/opt/miner-status/token.cfg"
 WALLET_FILE = "/opt/miner-status/wallet.cfg"
@@ -244,7 +243,6 @@ DASHBOARD = """
 <body>
   <h1>⛏ XCB Miner Status</h1>
   <p class="subtitle">Aktualisiert automatisch alle 30 Sekunden &nbsp;·&nbsp; Zuletzt: {{ now }}
-    &nbsp;·&nbsp; <span style="color:#4a9eff;font-size:0.8rem;">Dashboard v{{ app_version }}</span>
     &nbsp;·&nbsp; <a href="/admin?token=" style="color:#556;font-size:0.8rem;">⚙ Wallet</a>
   </p>
 
@@ -575,7 +573,6 @@ def dashboard():
         dead=len(miners) - alive_count,
         total_threads=total_threads,
         total_hashrate=format_hashrate(total_kh),
-        app_version=APP_VERSION,
     )
 
 

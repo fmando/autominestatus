@@ -11,7 +11,7 @@ from datetime import datetime
 from flask import Flask, request, jsonify, render_template_string
 
 app = Flask(__name__)
-APP_VERSION = "2.1.0"
+APP_VERSION = "2.2.0"
 DB          = "/opt/miner-status/status.db"
 TOKEN_FILE  = "/opt/miner-status/token.cfg"
 WALLET_FILE = "/opt/miner-status/wallet.cfg"
@@ -94,27 +94,44 @@ def init_db():
                 wait_sec    INTEGER,
                 pool_server TEXT,
                 worker      TEXT,
+                avg_hashrate TEXT,
                 reported_at INTEGER
             )
         """)
         db.execute("CREATE INDEX IF NOT EXISTS idx_hist_host ON history(hostname)")
 
-        # Migration: fehlende Spalten nachrüsten
+        db.execute("""
+            CREATE TABLE IF NOT EXISTS hashrate_history (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                hostname    TEXT NOT NULL,
+                hashrate_kh REAL,
+                reported_at INTEGER
+            )
+        """)
+        db.execute("CREATE INDEX IF NOT EXISTS idx_hr_host ON hashrate_history(hostname, reported_at)")
+
+        # Migration: fehlende Spalten in miners nachrüsten
         cols = [r[1] for r in db.execute("PRAGMA table_info(miners)").fetchall()]
         for col, typ in [
-            ("hashrate",    "TEXT"),
-            ("version",     "TEXT"),
-            ("deploy_date", "TEXT"),
-            ("host_ip",     "TEXT"),
-            ("host_os",     "TEXT"),
-            ("host_kernel", "TEXT"),
-            ("host_cpu",    "TEXT"),
-            ("host_ram",    "TEXT"),
+            ("hashrate",      "TEXT"),
+            ("version",       "TEXT"),
+            ("deploy_date",   "TEXT"),
+            ("host_ip",       "TEXT"),
+            ("host_os",       "TEXT"),
+            ("host_kernel",   "TEXT"),
+            ("host_cpu",      "TEXT"),
+            ("host_ram",      "TEXT"),
             ("host_cores",    "TEXT"),
             ("miner_version", "TEXT"),
         ]:
             if col not in cols:
                 db.execute(f"ALTER TABLE miners ADD COLUMN {col} {typ}")
+
+        # Migration: fehlende Spalten in history nachrüsten
+        hist_cols = [r[1] for r in db.execute("PRAGMA table_info(history)").fetchall()]
+        if "avg_hashrate" not in hist_cols:
+            db.execute("ALTER TABLE history ADD COLUMN avg_hashrate TEXT")
+
         db.commit()
 
 
@@ -409,6 +426,19 @@ HISTORY_PAGE = """
   </div>
   {% endif %}
 
+  {% if overall_avg %}
+  <div class="stats" style="margin-bottom:1.5rem;">
+    <div class="stat">
+      <div class="stat-value" style="color:#f0a040">{{ overall_avg }}</div>
+      <div class="stat-label">Ø Hashrate ({{ session_count }} Sessions)</div>
+    </div>
+    <div class="stat">
+      <div class="stat-value">{{ total }}</div>
+      <div class="stat-label">Sessions gesamt</div>
+    </div>
+  </div>
+  {% endif %}
+
   <p class="subtitle">{{ total }} Einträge in der Historie</p>
 
   {% if rows %}
@@ -419,6 +449,7 @@ HISTORY_PAGE = """
         <th>Zeitpunkt</th>
         <th>Threads</th>
         <th>Laufzeit</th>
+        <th>Ø Hashrate</th>
         <th>Pool-Server</th>
         <th>Worker</th>
       </tr>
@@ -437,6 +468,10 @@ HISTORY_PAGE = """
           </div>
         </td>
         <td>{{ r.wait_min }} min</td>
+        <td>
+          {% if r.avg_hashrate %}<span class="hashrate">{{ r.avg_hashrate }}</span>
+          {% else %}<span class="hashrate-none">–</span>{% endif %}
+        </td>
         <td>{{ r.pool_server }}</td>
         <td>{{ r.worker }}</td>
       </tr>
@@ -479,7 +514,30 @@ def report():
         "now":         now,
     }
 
+    hostname = params["hostname"]
+
     with get_db() as db:
+        # Abgeschlossene Session: Hashrate-Durchschnitt berechnen und in letzten History-Eintrag schreiben
+        last = db.execute(
+            "SELECT id, reported_at FROM history WHERE hostname = ? ORDER BY reported_at DESC LIMIT 1",
+            (hostname,)
+        ).fetchone()
+        if last:
+            row = db.execute("""
+                SELECT AVG(hashrate_kh) AS avg_kh FROM hashrate_history
+                WHERE hostname = ? AND reported_at >= ?
+            """, (hostname, last["reported_at"])).fetchone()
+            if row and row["avg_kh"]:
+                db.execute(
+                    "UPDATE history SET avg_hashrate = ? WHERE id = ?",
+                    (format_hashrate(row["avg_kh"]), last["id"])
+                )
+            # Verarbeitete Einträge aufräumen
+            db.execute(
+                "DELETE FROM hashrate_history WHERE hostname = ? AND reported_at < ?",
+                (hostname, now)
+            )
+
         db.execute("""
             INSERT INTO miners (hostname, threads, wait_sec, pool_server, worker,
                                 hashrate, version, deploy_date,
@@ -521,6 +579,7 @@ def hashrate():
     data = request.get_json(silent=True) or request.form
     if not data or "hostname" not in data or "hashrate" not in data:
         return jsonify({"error": "Fehlende Felder"}), 400
+    kh = parse_hashrate_kh(data.get("hashrate"))
     with get_db() as db:
         db.execute("""
             UPDATE miners SET
@@ -528,6 +587,11 @@ def hashrate():
                 miner_version = COALESCE(?, miner_version)
             WHERE hostname = ?
         """, (data.get("hashrate"), data.get("miner_version") or None, data.get("hostname")))
+        if kh > 0:
+            db.execute(
+                "INSERT INTO hashrate_history (hostname, hashrate_kh, reported_at) VALUES (?, ?, ?)",
+                (data.get("hostname"), kh, int(time.time()))
+            )
         db.commit()
     return jsonify({"ok": True}), 200
 
@@ -592,15 +656,23 @@ def host_history(hostname):
     info = dict(info_row) if info_row else {}
 
     entries = []
+    session_kh_values = []
     for r in rows:
+        kh = parse_hashrate_kh(r["avg_hashrate"]) if r["avg_hashrate"] else 0.0
+        if kh > 0:
+            session_kh_values.append(kh)
         entries.append({
             "threads":      r["threads"],
             "wait_min":     round(r["wait_sec"] / 60, 1),
             "pool_server":  r["pool_server"],
             "worker":       r["worker"],
+            "avg_hashrate": r["avg_hashrate"] or None,
             "reported_str": datetime.fromtimestamp(r["reported_at"]).strftime("%d.%m.%Y %H:%M:%S"),
             "ago":          fmt_age(now - r["reported_at"]),
         })
+
+    overall_avg = format_hashrate(sum(session_kh_values) / len(session_kh_values)) \
+                  if session_kh_values else None
 
     return render_template_string(
         HISTORY_PAGE,
@@ -609,6 +681,8 @@ def host_history(hostname):
         info=info,
         rows=entries,
         total=len(entries),
+        overall_avg=overall_avg,
+        session_count=len(session_kh_values),
     )
 
 

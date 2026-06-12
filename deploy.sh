@@ -180,8 +180,8 @@ read -rp "Maximale Laufzeit in Minuten [Standard: 15]: " MAX_MIN
 MAX_MIN="${MAX_MIN:-15}"
 
 # Status-Server
-read -rp "Status-Server URL [Standard: http://10.10.10.125:5000]: " STATUS_URL
-STATUS_URL="${STATUS_URL:-http://10.10.10.125:5000}"
+read -rp "Status-Server URL [Standard: https://status.m8u.de]: " STATUS_URL
+STATUS_URL="${STATUS_URL:-https://status.m8u.de}"
 
 # API-Token
 read -rp "API-Token (vom Status-Server): " API_TOKEN

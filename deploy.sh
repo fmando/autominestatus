@@ -6,7 +6,7 @@
 # - Holt Wallet vom zentralen Status-Server
 # - Entfernt alten automine-Dienst automatisch
 
-AUTOMINE_VERSION="2.1.0"
+AUTOMINE_VERSION="2.2.1"
 SERVICE_NAME="autominer2"
 OLD_SERVICES=("automine" "automine2")
 
@@ -112,35 +112,47 @@ echo ""
 echo "[deploy] Erkenne Serverstandort..."
 COUNTRY=$(curl -sf --max-time 5 "https://ipinfo.io/country" 2>/dev/null | tr -d '[:space:]')
 
+# Pools: de fi sg hk us – Backup-Reihenfolge nach geografischer Nähe
 case "$COUNTRY" in
-    DE|AT|CH|NL|BE|LU|FR|IT|ES|PT|PL|CZ|SK|HU|RO|BG|HR|SI|RS|GR|CY|MT|LI)
-        PRIMARY_POOL="de.catchthatrabbit.com" ;;
-    FI|NO|SE|DK|IS|EE|LV|LT|GB|IE|BY|UA|RU)
-        PRIMARY_POOL="fi.catchthatrabbit.com" ;;
-    SG|TH|PH|MY|ID|VN|MM|IN|AU|NZ|PK|BD|LK|NP)
-        PRIMARY_POOL="sg.catchthatrabbit.com" ;;
-    HK|CN|JP|KR|TW|MO)
-        PRIMARY_POOL="hk.catchthatrabbit.com" ;;
-    US|CA|MX|BR|AR|CL|CO|PE|VE|EC|BO|PY|UY|CR|PA|GT|HN|SV)
-        PRIMARY_POOL="us.catchthatrabbit.com" ;;
+    # Zentraleuropa / Westeuropa / Südeuropa / Afrika / Naher Osten
+    DE|AT|CH|NL|BE|LU|FR|IT|ES|PT|PL|CZ|SK|HU|RO|BG|HR|SI|RS|GR|CY|MT|LI|\
+    AL|BA|MK|ME|XK|AD|SM|MC|\
+    MA|DZ|TN|LY|EG|ZA|NG|KE|ET|GH|TZ|UG|SD|CM|SN|CI|MZ|AO|ZW|ZM|MW|BW|\
+    TR|AE|SA|IL|JO|LB|KW|QA|BH|OM|YE|IQ|IR|SY|AF)
+        PRIMARY_POOL="de.catchthatrabbit.com"
+        BACKUP_POOLS=("fi.catchthatrabbit.com" "us.catchthatrabbit.com" "sg.catchthatrabbit.com" "hk.catchthatrabbit.com")
+        ;;
+    # Nordeuropa / Osteuropa / Russland / GUS
+    FI|NO|SE|DK|IS|EE|LV|LT|GB|IE|BY|UA|RU|MD|AM|GE|AZ|KZ|UZ|TM|KG|TJ)
+        PRIMARY_POOL="fi.catchthatrabbit.com"
+        BACKUP_POOLS=("de.catchthatrabbit.com" "us.catchthatrabbit.com" "sg.catchthatrabbit.com" "hk.catchthatrabbit.com")
+        ;;
+    # Südostasien / Südasien / Ozeanien
+    SG|TH|PH|MY|ID|VN|MM|IN|AU|NZ|PK|BD|LK|NP|BT|MV)
+        PRIMARY_POOL="sg.catchthatrabbit.com"
+        BACKUP_POOLS=("hk.catchthatrabbit.com" "us.catchthatrabbit.com" "fi.catchthatrabbit.com" "de.catchthatrabbit.com")
+        ;;
+    # Ostasien
+    HK|CN|JP|KR|TW|MO|MN)
+        PRIMARY_POOL="hk.catchthatrabbit.com"
+        BACKUP_POOLS=("sg.catchthatrabbit.com" "us.catchthatrabbit.com" "fi.catchthatrabbit.com" "de.catchthatrabbit.com")
+        ;;
+    # Amerika
+    US|CA|MX|BR|AR|CL|CO|PE|VE|EC|BO|PY|UY|CR|PA|GT|HN|SV|NI|DO|CU|JM|TT|GY|SR|BB|HT|BS|BZ|PR)
+        PRIMARY_POOL="us.catchthatrabbit.com"
+        BACKUP_POOLS=("de.catchthatrabbit.com" "fi.catchthatrabbit.com" "sg.catchthatrabbit.com" "hk.catchthatrabbit.com")
+        ;;
+    # Fallback: DE
     *)
-        PRIMARY_POOL="de.catchthatrabbit.com" ;;
+        PRIMARY_POOL="de.catchthatrabbit.com"
+        BACKUP_POOLS=("fi.catchthatrabbit.com" "us.catchthatrabbit.com" "sg.catchthatrabbit.com" "hk.catchthatrabbit.com")
+        ;;
 esac
 
 echo "[deploy] Land: ${COUNTRY:-unbekannt} → primärer Pool: $PRIMARY_POOL"
 
-# Alle Pools, primärer zuerst
-ALL_POOLS=(
-    "de.catchthatrabbit.com"
-    "fi.catchthatrabbit.com"
-    "sg.catchthatrabbit.com"
-    "hk.catchthatrabbit.com"
-    "us.catchthatrabbit.com"
-)
-ORDERED_POOLS=("$PRIMARY_POOL")
-for p in "${ALL_POOLS[@]}"; do
-    [[ "$p" != "$PRIMARY_POOL" ]] && ORDERED_POOLS+=("$p")
-done
+# Pools in Reihenfolge: primärer + geografisch sortierte Backups
+ORDERED_POOLS=("$PRIMARY_POOL" "${BACKUP_POOLS[@]}")
 
 # ---------------------------------------------------------------------------
 # Eingaben
@@ -182,6 +194,13 @@ MAX_MIN="${MAX_MIN:-15}"
 # Status-Server
 read -rp "Status-Server URL [Standard: https://status.m8u.de]: " STATUS_URL
 STATUS_URL="${STATUS_URL:-https://status.m8u.de}"
+# Warnung: https + IP-Adresse funktioniert nicht ohne Zertifikat
+if [[ "$STATUS_URL" =~ ^https://[0-9] ]]; then
+    echo "  ⚠ Hinweis: https:// mit einer IP-Adresse funktioniert ohne SSL-Zertifikat nicht."
+    echo "  Bitte http:// verwenden (z.B. http://10.10.10.125:5000) oder eine Domain mit Zertifikat."
+    read -rp "  URL korrigieren: " STATUS_URL_FIX
+    [[ -n "$STATUS_URL_FIX" ]] && STATUS_URL="$STATUS_URL_FIX"
+fi
 
 # API-Token
 read -rp "API-Token (vom Status-Server): " API_TOKEN
@@ -254,7 +273,7 @@ fetch_wallet() {
         wallet=\$(curl -sf --max-time 10 \\
             "\${STATUS_BASE}/wallet?token=\${API_TOKEN}" 2>/dev/null | tr -d '[:space:]')
         if [[ -z "\$wallet" ]]; then
-            echo "[automine] Status-Server nicht erreichbar, warte 30s..."
+            echo "[automine] Status-Server nicht erreichbar, warte 30s..." >&2
             sleep 30
         fi
     done

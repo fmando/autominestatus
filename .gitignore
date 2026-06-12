@@ -1,4 +1,7 @@
 pool.cfg
+.autominer2.cfg
+automine.sh
+coreminer
 status.db
 venv/
 __pycache__/

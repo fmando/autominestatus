@@ -9,6 +9,9 @@
 AUTOMINE_VERSION="2.2.1"
 SERVICE_NAME="autominer2"
 OLD_SERVICES=("automine" "automine2")
+CFG_FILE="$(cd "$(dirname "$0")" && pwd)/.autominer2.cfg"
+UPDATE_MODE=false
+[[ "$1" == "--update" ]] && UPDATE_MODE=true
 
 set -e
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -155,79 +158,111 @@ echo "[deploy] Land: ${COUNTRY:-unbekannt} → primärer Pool: $PRIMARY_POOL"
 ORDERED_POOLS=("$PRIMARY_POOL" "${BACKUP_POOLS[@]}")
 
 # ---------------------------------------------------------------------------
-# Eingaben
+# Eingaben – interaktiv oder aus Config-Datei
 # ---------------------------------------------------------------------------
 
 echo ""
 
-# Worker-Name
-read -rp "Worker-Name (z.B. Ccloud06): " WORKER
-while [[ -z "$WORKER" ]]; do
-    echo "  Worker-Name darf nicht leer sein."
-    read -rp "Worker-Name: " WORKER
-done
+if $UPDATE_MODE; then
+    # --update: Config laden, keine Rückfragen
+    if [[ ! -f "$CFG_FILE" ]]; then
+        echo "[deploy] FEHLER: --update angegeben, aber keine Config-Datei gefunden: $CFG_FILE"
+        echo "         Bitte einmalig ohne --update ausführen."
+        exit 1
+    fi
+    # shellcheck source=/dev/null
+    source "$CFG_FILE"
+    echo "[deploy] Update-Modus: Config geladen aus $CFG_FILE"
+    echo "  Worker: $WORKER | Threads: $MIN_THREADS–$MAX_THREADS | Laufzeit: $MIN_MIN–${MAX_MIN}min"
+    echo "  Status-Server: $STATUS_URL | Hostname: $CUSTOM_HOST"
+    echo ""
+else
+    # Interaktiver Modus
+    CPU_THREADS=$(nproc)
 
-# CPU-Threads
-CPU_THREADS=$(nproc)
-echo "  Diese CPU hat $CPU_THREADS Threads."
-echo ""
+    # Vorhandene Config als Standardwerte anbieten
+    if [[ -f "$CFG_FILE" ]]; then
+        source "$CFG_FILE"
+        echo "[deploy] Vorhandene Konfiguration gefunden – Enter zum Übernehmen, oder neuen Wert eingeben."
+        echo ""
+    fi
 
-read -rp "Maximale Thread-Anzahl [Standard: $CPU_THREADS]: " MAX_THREADS
-MAX_THREADS="${MAX_THREADS:-$CPU_THREADS}"
-while ! [[ "$MAX_THREADS" =~ ^[0-9]+$ ]] || (( MAX_THREADS < 1 || MAX_THREADS > 128 )); do
-    echo "  Bitte eine Zahl zwischen 1 und 128 eingeben."
-    read -rp "Maximale Thread-Anzahl: " MAX_THREADS
-done
+    # Worker-Name
+    read -rp "Worker-Name [${WORKER:-z.B. Ccloud06}]: " INPUT
+    [[ -n "$INPUT" ]] && WORKER="$INPUT"
+    while [[ -z "$WORKER" ]]; do
+        echo "  Worker-Name darf nicht leer sein."
+        read -rp "Worker-Name: " WORKER
+    done
 
-read -rp "Minimale Thread-Anzahl [Standard: 1]: " MIN_THREADS
-MIN_THREADS="${MIN_THREADS:-1}"
-while ! [[ "$MIN_THREADS" =~ ^[0-9]+$ ]] || (( MIN_THREADS < 1 || MIN_THREADS > MAX_THREADS )); do
-    echo "  Bitte eine Zahl zwischen 1 und $MAX_THREADS eingeben."
-    read -rp "Minimale Thread-Anzahl: " MIN_THREADS
-done
+    # CPU-Threads
+    echo "  Diese CPU hat $CPU_THREADS Threads."
+    echo ""
 
-read -rp "Minimale Laufzeit in Minuten [Standard: 5]: " MIN_MIN
-MIN_MIN="${MIN_MIN:-5}"
-read -rp "Maximale Laufzeit in Minuten [Standard: 15]: " MAX_MIN
-MAX_MIN="${MAX_MIN:-15}"
+    read -rp "Maximale Thread-Anzahl [Standard: ${MAX_THREADS:-$CPU_THREADS}]: " INPUT
+    [[ -n "$INPUT" ]] && MAX_THREADS="$INPUT"
+    MAX_THREADS="${MAX_THREADS:-$CPU_THREADS}"
+    while ! [[ "$MAX_THREADS" =~ ^[0-9]+$ ]] || (( MAX_THREADS < 1 || MAX_THREADS > 128 )); do
+        echo "  Bitte eine Zahl zwischen 1 und 128 eingeben."
+        read -rp "Maximale Thread-Anzahl: " MAX_THREADS
+    done
 
-# Status-Server
-read -rp "Status-Server URL [Standard: https://status.m8u.de]: " STATUS_URL
-STATUS_URL="${STATUS_URL:-https://status.m8u.de}"
-# Warnung: https + IP-Adresse funktioniert nicht ohne Zertifikat
-if [[ "$STATUS_URL" =~ ^https://[0-9] ]]; then
-    echo "  ⚠ Hinweis: https:// mit einer IP-Adresse funktioniert ohne SSL-Zertifikat nicht."
-    echo "  Bitte http:// verwenden (z.B. http://10.10.10.125:5000) oder eine Domain mit Zertifikat."
-    read -rp "  URL korrigieren: " STATUS_URL_FIX
-    [[ -n "$STATUS_URL_FIX" ]] && STATUS_URL="$STATUS_URL_FIX"
+    read -rp "Minimale Thread-Anzahl [Standard: ${MIN_THREADS:-1}]: " INPUT
+    [[ -n "$INPUT" ]] && MIN_THREADS="$INPUT"
+    MIN_THREADS="${MIN_THREADS:-1}"
+    while ! [[ "$MIN_THREADS" =~ ^[0-9]+$ ]] || (( MIN_THREADS < 1 || MIN_THREADS > MAX_THREADS )); do
+        echo "  Bitte eine Zahl zwischen 1 und $MAX_THREADS eingeben."
+        read -rp "Minimale Thread-Anzahl: " MIN_THREADS
+    done
+
+    read -rp "Minimale Laufzeit in Minuten [Standard: ${MIN_MIN:-5}]: " INPUT
+    [[ -n "$INPUT" ]] && MIN_MIN="$INPUT"
+    MIN_MIN="${MIN_MIN:-5}"
+
+    read -rp "Maximale Laufzeit in Minuten [Standard: ${MAX_MIN:-15}]: " INPUT
+    [[ -n "$INPUT" ]] && MAX_MIN="$INPUT"
+    MAX_MIN="${MAX_MIN:-15}"
+
+    # Status-Server
+    read -rp "Status-Server URL [Standard: ${STATUS_URL:-https://status.m8u.de}]: " INPUT
+    [[ -n "$INPUT" ]] && STATUS_URL="$INPUT"
+    STATUS_URL="${STATUS_URL:-https://status.m8u.de}"
+    if [[ "$STATUS_URL" =~ ^https://[0-9] ]]; then
+        echo "  ⚠ Hinweis: https:// mit einer IP-Adresse funktioniert ohne SSL-Zertifikat nicht."
+        echo "  Bitte http:// verwenden (z.B. http://10.10.10.125:5000) oder eine Domain mit Zertifikat."
+        read -rp "  URL korrigieren: " STATUS_URL_FIX
+        [[ -n "$STATUS_URL_FIX" ]] && STATUS_URL="$STATUS_URL_FIX"
+    fi
+
+    # API-Token
+    read -rp "API-Token [${API_TOKEN:+gesetzt, Enter zum Behalten}]: " INPUT
+    [[ -n "$INPUT" ]] && API_TOKEN="$INPUT"
+    while [[ -z "$API_TOKEN" ]]; do
+        echo "  API-Token darf nicht leer sein."
+        read -rp "API-Token: " API_TOKEN
+    done
+
+    # Hostname
+    DEFAULT_HOST="$(hostname -s)"
+    read -rp "Hostname fürs Dashboard [Standard: ${CUSTOM_HOST:-$DEFAULT_HOST}]: " INPUT
+    [[ -n "$INPUT" ]] && CUSTOM_HOST="$INPUT"
+    CUSTOM_HOST="${CUSTOM_HOST:-$DEFAULT_HOST}"
+
+    echo ""
+    echo "── Zusammenfassung ─────────────────────────────────"
+    echo "  Version:       v$AUTOMINE_VERSION"
+    echo "  Worker:        $WORKER"
+    echo "  Threads:       $MIN_THREADS–$MAX_THREADS"
+    echo "  Laufzeit:      $MIN_MIN–$MAX_MIN Minuten"
+    echo "  Primärer Pool: $PRIMARY_POOL"
+    echo "  Status-Server: $STATUS_URL"
+    echo "  Hostname:      $CUSTOM_HOST"
+    echo "────────────────────────────────────────────────────"
+    echo ""
+    read -rp "Alles korrekt? Weiter? [J/n]: " CONFIRM
+    CONFIRM="${CONFIRM:-J}"
+    [[ ! "$CONFIRM" =~ ^[Jj]$ ]] && { echo "Abgebrochen."; exit 0; }
 fi
-
-# API-Token
-read -rp "API-Token (vom Status-Server): " API_TOKEN
-while [[ -z "$API_TOKEN" ]]; do
-    echo "  API-Token darf nicht leer sein."
-    read -rp "API-Token: " API_TOKEN
-done
-
-# Hostname fürs Dashboard
-DEFAULT_HOST="$(hostname -s)"
-read -rp "Hostname fürs Dashboard [Standard: $DEFAULT_HOST]: " CUSTOM_HOST
-CUSTOM_HOST="${CUSTOM_HOST:-$DEFAULT_HOST}"
-
-echo ""
-echo "── Zusammenfassung ─────────────────────────────────"
-echo "  Version:       v$AUTOMINE_VERSION"
-echo "  Worker:        $WORKER"
-echo "  Threads:       $MIN_THREADS–$MAX_THREADS"
-echo "  Laufzeit:      $MIN_MIN–$MAX_MIN Minuten"
-echo "  Primärer Pool: $PRIMARY_POOL"
-echo "  Status-Server: $STATUS_URL"
-echo "  Hostname:      $CUSTOM_HOST"
-echo "────────────────────────────────────────────────────"
-echo ""
-read -rp "Alles korrekt? Weiter? [J/n]: " CONFIRM
-CONFIRM="${CONFIRM:-J}"
-[[ ! "$CONFIRM" =~ ^[Jj]$ ]] && { echo "Abgebrochen."; exit 0; }
 
 # ---------------------------------------------------------------------------
 # automine.sh generieren
@@ -437,6 +472,24 @@ SCRIPTEOF
 
 chmod +x "$SCRIPT_DIR/automine.sh"
 echo "[deploy] automine.sh v$AUTOMINE_VERSION geschrieben."
+
+# ---------------------------------------------------------------------------
+# Konfiguration speichern (für spätere Updates via --update)
+# ---------------------------------------------------------------------------
+
+cat > "$CFG_FILE" <<CFGEOF
+# Autominer2 Konfiguration – gespeichert am $(date '+%Y-%m-%d %H:%M')
+WORKER="$WORKER"
+MIN_THREADS="$MIN_THREADS"
+MAX_THREADS="$MAX_THREADS"
+MIN_MIN="$MIN_MIN"
+MAX_MIN="$MAX_MIN"
+STATUS_URL="$STATUS_URL"
+API_TOKEN="$API_TOKEN"
+CUSTOM_HOST="$CUSTOM_HOST"
+CFGEOF
+chmod 600 "$CFG_FILE"
+echo "[deploy] Konfiguration gespeichert: $CFG_FILE"
 
 # ---------------------------------------------------------------------------
 # Alte Services entfernen (falls vorhanden)

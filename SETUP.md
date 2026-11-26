@@ -47,7 +47,7 @@ systemctl status miner-status     # sollte "active (running)" zeigen
 In deine bestehende Caddyfile (oder eine neue Datei in /etc/caddy/conf.d/):
 
 ```
-status.m8n.de {
+status.m8u.de {
     reverse_proxy 10.10.10.125:5000
 }
 ```
@@ -57,9 +57,9 @@ Danach:
 caddy reload   # oder: systemctl reload caddy
 ```
 
-Caddy holt automatisch ein Let's-Encrypt-Zertifikat für status.m8n.de –
+Caddy holt automatisch ein Let's-Encrypt-Zertifikat für status.m8u.de –
 dafür muss Port 80/443 öffentlich erreichbar sein und der DNS-Eintrag
-status.m8n.de auf die Hetzner-IP zeigen.
+status.m8u.de auf die Hetzner-IP zeigen.
 
 ## 5. automine.sh auf den Mining-Servern aktualisieren
 
@@ -80,7 +80,7 @@ CUSTOM_HOSTNAME="miner-berlin-01" ./automine.sh
 
 ```bash
 # Manuell eine Meldung schicken (zum Testen):
-curl -X POST https://status.m8n.de/report \
+curl -X POST https://status.m8u.de/report \
   -H "Content-Type: application/json" \
   -d '{"hostname":"test-host","threads":2,"wait_sec":600,"pool_server":"de.catchthatrabbit.com","worker":"Ccloud06"}'
 

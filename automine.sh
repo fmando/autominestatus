@@ -1,12 +1,12 @@
 #!/bin/bash
 # automine.sh – Startet mine.sh in einer Schleife,
 # wechselt nach 5–15 Minuten die Thread-Anzahl (1–4).
-# Meldet sich nach jedem Neustart an status.m8n.de/report.
+# Meldet sich nach jedem Neustart an status.m8u.de/report.
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 MINE="$SCRIPT_DIR/mine.sh"
 CFG="$SCRIPT_DIR/pool.cfg"
-STATUS_URL="https://status.m8n.de/report"
+STATUS_URL="https://status.m8u.de/report"
 HOSTNAME="${CUSTOM_HOSTNAME:-$(hostname -s)}"   # überschreibbar per Env-Variable
 
 cleanup() {
